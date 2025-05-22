@@ -1,24 +1,109 @@
-# Compiled class file
-*.class
+/*
+ * Group Name: CyberGuardians
+ * Group Members: Tyrin Long, Rowland , Pierre
+ * Course: SCIA 360 - Operating System Security
+ * Project: Linux Kernel Module for Real-Time Health Monitoring
+ */
 
-# Log file
-*.log
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+#include <linux/uaccess.h>
+#include <linux/timer.h>
+#include <linux/jiffies.h>
+#include <linux/mm.h>
+#include <linux/sched/loadavg.h>
+#include <linux/genhd.h>
+#include <linux/blkdev.h>
 
-# BlueJ files
-*.ctxt
+#define PROC_FILENAME "sys_health"
+#define INTERVAL_SEC 5
 
-# Mobile Tools for Java (J2ME)
-.mtj.tmp/
+static struct timer_list health_timer;
+static struct proc_dir_entry *proc_entry;
+static unsigned long last_disk_io = 0;
 
-# Package Files #
-*.jar
-*.war
-*.nar
-*.ear
-*.zip
-*.tar.gz
-*.rar
+// Configurable thresholds (defaults)
+static int mem_threshold = 100; // in MB
+module_param(mem_threshold, int, 0644);
+MODULE_PARM_DESC(mem_threshold, "Memory usage threshold in MB");
 
-# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
-hs_err_pid*
-replay_pid*
+// Storage for last collected metrics
+static unsigned long mem_free_mb = 0;
+static unsigned long mem_total_mb = 0;
+static unsigned long cpu_load = 0;
+
+static void collect_metrics(struct timer_list *t)
+{
+    struct sysinfo info;
+    si_meminfo(&info);
+    mem_total_mb = (info.totalram * 4) / 1024; // In MB
+    mem_free_mb = (info.freeram * 4) / 1024;
+
+    unsigned long load = avenrun[0] >> FSHIFT;
+    cpu_load = load;
+
+    if (mem_free_mb < mem_threshold) {
+        printk(KERN_WARNING "[CyberGuardians] Alert: Free memory (%luMB) below threshold (%dMB)\n", mem_free_mb, mem_threshold);
+    }
+
+    if (cpu_load > 5) { // arbitrary CPU load threshold
+        printk(KERN_WARNING "[CyberGuardians] Alert: High CPU Load - %lu\n", cpu_load);
+    }
+
+    mod_timer(&health_timer, jiffies + INTERVAL_SEC * HZ);
+}
+
+static int proc_show(struct seq_file *m, void *v)
+{
+    seq_printf(m, "Group: CyberGuardians\n");
+    seq_printf(m, "Team: Alice Smith, Bob Johnson, Charlie Lee\n");
+    seq_printf(m, "Total Memory: %lu MB\n", mem_total_mb);
+    seq_printf(m, "Free Memory: %lu MB\n", mem_free_mb);
+    seq_printf(m, "CPU Load: %lu (1-minute average)\n", cpu_load);
+    return 0;
+}
+
+static int proc_open(struct inode *inode, struct file *file)
+{
+    return single_open(file, proc_show, NULL);
+}
+
+static const struct proc_ops proc_file_ops = {
+    .proc_open = proc_open,
+    .proc_read = seq_read,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release,
+};
+
+static int __init sys_health_init(void)
+{
+    printk(KERN_INFO "[CyberGuardians] SCIA 360: Module loaded successfully. Team Members: Alice Smith, Bob Johnson, Charlie Lee\n");
+
+    proc_entry = proc_create(PROC_FILENAME, 0444, NULL, &proc_file_ops);
+    if (!proc_entry) {
+        printk(KERN_ERR "[CyberGuardians] Failed to create /proc/%s\n", PROC_FILENAME);
+        return -ENOMEM;
+    }
+
+    timer_setup(&health_timer, collect_metrics, 0);
+    mod_timer(&health_timer, jiffies + INTERVAL_SEC * HZ);
+    return 0;
+}
+
+static void __exit sys_health_exit(void)
+{
+    del_timer_sync(&health_timer);
+    remove_proc_entry(PROC_FILENAME, NULL);
+    printk(KERN_INFO "[CyberGuardians] SCIA 360: Module unloaded. Team Members: Alice Smith, Bob Johnson, Charlie Lee\n");
+}
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("CyberGuardians");
+MODULE_DESCRIPTION("SCIA 360: Linux Kernel Module for Real-Time Health Monitoring");
+MODULE_VERSION("1.0");
+
+module_init(sys_health_init);
+module_exit(sys_health_exit);
